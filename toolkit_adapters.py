@@ -11,6 +11,7 @@ from filesystem import ProjectExplorer
 from code_reader import CodeReader, ProjectIndex
 from code_editor import CodeEditor
 from skill_manager import SkillManager
+from web_search import WebSearchManager
 
 
 class ToolkitAdapter:
@@ -25,6 +26,7 @@ class ToolkitAdapter:
         self.editor = CodeEditor(self.root)
         self.index = ProjectIndex(self.root)
         self.skill_manager = SkillManager(project_root=self.root)
+        self.web_search_manager = WebSearchManager()
 
         # Build the index once here
         self.index.build_index()
@@ -53,6 +55,9 @@ class ToolkitAdapter:
         self.tools["get_skill"] = self._wrap(self._get_skill)
         self.tools["read_skill_resource"] = self._wrap(self._read_skill_resource)
         self.tools["execute_skill_script"] = self._wrap(self._execute_skill_script)
+        self.tools["web_search"] = self._wrap(self._web_search)
+        self.tools["fetch_web_page"] = self._wrap(self._fetch_web_page)
+        self.tools["search_code_docs"] = self._wrap(self._search_code_docs)
         self.tools["help"] = self._wrap(self._help)
 
     def _wrap_explore(self, args: Dict[str, Any]) -> str:
@@ -260,6 +265,22 @@ class ToolkitAdapter:
             return "ERROR: skill_name and script_name are required."
         return self.skill_manager.execute_skill_script(skill_name, script_name, script_args)
 
+    # ---------- Web Search tools ----------
+    def _web_search(self, args: Dict[str, Any]) -> str:
+        query = str(args.get("query", "")).strip().strip("'\"")
+        max_results = int(args.get("max_results", 5))
+        return self.web_search_manager.search(query, max_results=max_results)
+
+    def _fetch_web_page(self, args: Dict[str, Any]) -> str:
+        url = str(args.get("url", "")).strip().strip("'\"")
+        max_chars = int(args.get("max_chars", 4000))
+        return self.web_search_manager.fetch_page(url, max_chars=max_chars)
+
+    def _search_code_docs(self, args: Dict[str, Any]) -> str:
+        query = str(args.get("query", "")).strip().strip("'\"")
+        topic = str(args.get("topic", "python")).strip().strip("'\"")
+        return self.web_search_manager.search_code_docs(query, topic=topic)
+
     def _help(self, args: Dict[str, Any] = None) -> str:
         return """
 ## Available Tools
@@ -292,6 +313,11 @@ class ToolkitAdapter:
 - get_skill(skill_name: str) -> str
 - read_skill_resource(skill_name: str, resource_rel_path: str) -> str
 - execute_skill_script(skill_name: str, script_name: str, args: list?) -> str
+
+### Web Search
+- web_search(query: str, max_results: int?) -> str
+- fetch_web_page(url: str, max_chars: int?) -> str
+- search_code_docs(query: str, topic: str?) -> str
 """
 
     # ---------- generic wrapper ----------
@@ -366,5 +392,8 @@ class ToolkitAdapter:
             "get_skill": {"skill_name": "str"},
             "read_skill_resource": {"skill_name": "str", "resource_rel_path": "str"},
             "execute_skill_script": {"skill_name": "str", "script_name": "str", "args": "list?"},
+            "web_search": {"query": "str", "max_results": "int?"},
+            "fetch_web_page": {"url": "str", "max_chars": "int?"},
+            "search_code_docs": {"query": "str", "topic": "str?"},
             "help": {},
         }

@@ -27,6 +27,9 @@ class AgentCommand(Enum):
     GET_SKILL = "get_skill"
     READ_SKILL_RESOURCE = "read_skill_resource"
     EXECUTE_SKILL_SCRIPT = "execute_skill_script"
+    WEB_SEARCH = "web_search"
+    FETCH_WEB_PAGE = "fetch_web_page"
+    SEARCH_CODE_DOCS = "search_code_docs"
     RUN_SHELL = "run_shell"
     GET_WORKDIR = "get_workdir"
 
@@ -52,7 +55,7 @@ class AgentResponse:
 
 
 class LocalAgent:
-    """Agent that can work with local code projects and skills."""
+    """Agent that can work with local code projects, skills, and web search."""
 
     def __init__(self, project_path: str,
                  auto_apply_edits: bool = False,
@@ -66,12 +69,14 @@ class LocalAgent:
         from code_reader import CodeReader, ProjectIndex
         from code_editor import CodeEditor
         from skill_manager import SkillManager
+        from web_search import WebSearchManager
 
         self.explorer = ProjectExplorer(str(self.project_root))
         self.reader = CodeReader(self.project_root)
-        self.editor = CodeEditor(self.project_root)
+        self.editor = CodeEditor(self.project_root, auto_apply=self.auto_apply)
         self.index = ProjectIndex(self.project_root)
         self.skill_manager = SkillManager(project_root=self.project_root)
+        self.web_search_manager = WebSearchManager()
 
         # Build initial index
         self.index.build_index()
@@ -112,6 +117,11 @@ class LocalAgent:
 - `get_skill(skill_name)` - View skill instructions and capabilities
 - `read_skill_resource(skill_name, resource_rel_path)` - Read reference doc or schema from skill
 - `execute_skill_script(skill_name, script_name, args)` - Run script from skill
+
+### Web Search & Content Fetching
+- `web_search(query, max_results)` - Search the live web
+- `fetch_web_page(url, max_chars)` - Extract readable markdown content from webpage
+- `search_code_docs(query, topic)` - Search library/framework documentation
 
 ### Miscellaneous
 - `run_shell(command)` - Execute shell command
@@ -167,6 +177,9 @@ class LocalAgent:
             AgentCommand.GET_SKILL: self._cmd_get_skill,
             AgentCommand.READ_SKILL_RESOURCE: self._cmd_read_skill_resource,
             AgentCommand.EXECUTE_SKILL_SCRIPT: self._cmd_execute_skill_script,
+            AgentCommand.WEB_SEARCH: self._cmd_web_search,
+            AgentCommand.FETCH_WEB_PAGE: self._cmd_fetch_web_page,
+            AgentCommand.SEARCH_CODE_DOCS: self._cmd_search_code_docs,
             AgentCommand.RUN_SHELL: self._cmd_run_shell,
             AgentCommand.GET_WORKDIR: self._cmd_workdir,
         }
@@ -352,6 +365,21 @@ class LocalAgent:
         if isinstance(args, str):
             args = [args]
         return self.skill_manager.execute_skill_script(skill_name, script_name, args)
+
+    def _cmd_web_search(self, kwargs: Dict) -> str:
+        query = kwargs.get("query", "")
+        max_results = kwargs.get("max_results", 5)
+        return self.web_search_manager.search(query, max_results=max_results)
+
+    def _cmd_fetch_web_page(self, kwargs: Dict) -> str:
+        url = kwargs.get("url", "")
+        max_chars = kwargs.get("max_chars", 4000)
+        return self.web_search_manager.fetch_page(url, max_chars=max_chars)
+
+    def _cmd_search_code_docs(self, kwargs: Dict) -> str:
+        query = kwargs.get("query", "")
+        topic = kwargs.get("topic", "python")
+        return self.web_search_manager.search_code_docs(query, topic=topic)
 
     def _cmd_workdir(self, kwargs: Dict) -> str:
         return str(self.project_root)

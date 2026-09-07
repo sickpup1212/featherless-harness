@@ -259,9 +259,10 @@ class CodeEditor:
 
         for sym in symbols:
             if sym.name == symbol_name:
+                start = sym.start_line if include_signature else min(sym.start_line + 1, sym.end_line)
                 return self.replace_lines(
                     file_path,
-                    sym.start_line,
+                    start,
                     sym.end_line,
                     new_body,
                     description

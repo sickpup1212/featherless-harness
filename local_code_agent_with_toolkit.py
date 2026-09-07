@@ -29,7 +29,7 @@ if LANGCHAIN_AVAILABLE:
         model="TrevorJS/gemma-4-26B-A4B-it-uncensored",
     )
 
-TOOL_CALL_RE = re.compile(r"call:(\w+)\{([^}]+)\}(?:\s*```\w*\s*(\{.*?\})\s*```)?", re.DOTALL)
+TOOL_CALL_RE = re.compile(r"call:(\w+)\{([^}]*)\}(?:\s*```\w*\s*(\{.*?\})\s*```)?", re.DOTALL)
 MAX_TOOL_CALLS_PER_TURN = 20
 
 def parse_tool_calls_from_text(text: str) -> List[Dict[str, Any]]:
@@ -77,7 +77,7 @@ def parse_inline_args(args_str: str) -> Dict[str, Any]:
         args[key] = value
     return args
 
-SYSTEM_TEMPLATE = """You are a coding assistant with access to local filesystem tools and a SKILL framework.
+SYSTEM_TEMPLATE = """You are a coding assistant with access to local filesystem tools, a SKILL framework, and web search capabilities.
 Project root: {project_root}
 
 You have access to the following tools. Use them by emitting a tool call
@@ -97,8 +97,9 @@ Examples:
 - call:get_project_index{{}}
 - call:list_skills{{}}
 - call:get_skill{{skill_name: code_review}}
-- call:read_skill_resource{{skill_name: code_review, resource_rel_path: references/checklist.md}}
-- call:execute_skill_script{{skill_name: code_review, script_name: scripts/lint.py}}
+- call:web_search{{query: python asyncio tutorial, max_results: 5}}
+- call:fetch_web_page{{url: https://docs.python.org/3/library/asyncio.html}}
+- call:search_code_docs{{query: create_task, topic: python}}
 
 Tool schemas:
 {tool_schemas}
@@ -112,7 +113,7 @@ General guidance:
 - Use explore() first to understand the project structure.
 - Use read_file() or read_chunk() to examine code.
 - Use search_symbols() to find functions/classes across the project.
-- Use list_skills() and get_skill() to discover domain workflows, references, or specialized scripts.
+- Use web_search(), fetch_web_page(), and search_code_docs() to find online documentation, APIs, and external library usages.
 - Edits are queued by default; call apply_pending_edits() to commit them.
 - Always list_pending_edits() before applying to review changes.
 """

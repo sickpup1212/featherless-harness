@@ -1,3 +1,4 @@
+import sys
 import os
 import re
 import json
@@ -241,7 +242,7 @@ class SkillManager:
 
         cmd = []
         if script_path.suffix == ".py":
-            cmd = ["python3", str(script_path)]
+            cmd = [sys.executable, str(script_path)]
         elif script_path.suffix in (".sh", ".bash"):
             cmd = ["bash", str(script_path)]
         else:
