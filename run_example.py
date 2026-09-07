@@ -1,7 +1,11 @@
 from pathlib import Path
 from local_code_agent_with_toolkit import workflow_runnable
 
-PROJECT = str(Path("C:\\Users\\edub\\Documents\\FileExplorer").resolve())
+target_path = Path(r"C:\Users\edub\Documents\FileExplorer")
+if not target_path.exists():
+    target_path = Path(".").resolve()
+
+PROJECT = str(target_path)
 
 # 1. Explore + search symbols in one turn (uses multiple tool calls)
 print("=== Explore + Search ===")
