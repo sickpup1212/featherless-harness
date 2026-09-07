@@ -4,13 +4,32 @@ A comprehensive harness and local code agent toolkit for Featherless AI models.
 
 ## Overview
 
-`featherless-harness` provides a set of tools for local code exploration, AST symbol analysis, line-level code editing, agent orchestration, an extensible **SKILL system**, and an LLM-optimized **Web Search framework**.
+`featherless-harness` provides a set of tools for local code exploration, AST symbol analysis, line-level code editing, agent orchestration, an extensible **SKILL system**, an LLM-optimized **Web Search framework**, and an **Autonomous Agent Execution Loop** (similar to Claude Code or Hermes).
+
+---
+
+## Autonomous Agent Execution (Claude Code / Hermes Style)
+
+The framework supports autonomous, multi-turn, multi-tool execution loops (`run_agent_loop`).
+
+### How It Works
+1. **High-Level User Prompt**: You give the agent a single, complex prompt (e.g. *"Inspect the codebase for functions without docstrings, write docstrings for them, and run linter"*).
+2. **Autonomous Loop (`while not done`)**:
+   - The model evaluates current conversation history and emits one or more tool calls.
+   - The harness intercepts and dispatches tool calls locally, capturing output into `ToolMessage`s.
+   - The harness feeds results directly back into the conversation history and loops automatically until the LLM concludes the task or reaches `max_turns`.
+3. **Completion**: When the LLM decides no further tool calls are required, it provides a final summary and breaks out of the loop.
+
+Run the autonomous agent example via:
+```bash
+python3 run_autonomous_agent.py
+```
 
 ---
 
 ## Web Search Framework & Recommended APIs
 
-Frontier AI web search relies on specialized search APIs optimized for LLMs and RAG rather than raw search engine scraping. `featherless-harness` supports the top industry web search providers with automatic keyless fallback:
+Frontier AI web search relies on specialized search APIs optimized for LLMs and RAG rather than raw search engine scraping. `featherless-harness` supports top industry web search providers with automatic keyless fallback:
 
 ### Recommended API Providers
 
@@ -20,12 +39,6 @@ Frontier AI web search relies on specialized search APIs optimized for LLMs and 
 | **Serper.dev** | `SERPER_API_KEY` | Fast, reliable Google Search SERP API (~200ms latency). Returns knowledge graphs, answer boxes, and organic results. Get a key at [serper.dev](https://serper.dev). |
 | **Brave Search** | `BRAVE_API_KEY` | Fast, independent, privacy-focused search index with rich snippets. Get a key at [brave.com/search/api](https://brave.com/search/api/). |
 | **Multi-Layer Keyless Fallback** | *(None required)* | Automatic zero-config fallback combining DuckDuckGo HTML, DuckDuckGo Instant Answer API, and Wikipedia Search API. |
-
-### Web Search Tools
-
-- `web_search(query: str, max_results: int?)`: Search the live web using Tavily -> Serper -> Brave -> Keyless Fallback.
-- `fetch_web_page(url: str, max_chars: int?)`: Extract clean, readable Markdown from any webpage URL with automatic gzip decompression.
-- `search_code_docs(query: str, topic: str?)`: Execute targeted documentation searches for software libraries and frameworks.
 
 ---
 
@@ -51,30 +64,6 @@ skills/
     │   └── providers_guide.md
     └── scripts/                # Utility scripts
         └── search_and_summarize.py
-```
-
-### `SKILL.md` Format
-
-A `SKILL.md` file uses YAML frontmatter followed by markdown instructions:
-
-```markdown
----
-name: code_review
-description: Comprehensive code review checklist and automated linter helper.
-version: 1.1.0
-tags: [review, quality, linting]
----
-
-# Code Review Skill
-
-This skill provides guidelines and automated tools for conducting code reviews.
-
-## When to Use
-- Before submitting pull requests or committing major changes.
-
-## Capabilities
-- Read the checklist reference doc at `references/checklist.md`.
-- Run automated code analysis using `scripts/analyze_quality.py`.
 ```
 
 ---
@@ -118,31 +107,17 @@ The framework exposes the following tools via `ToolkitAdapter` and `LocalAgent`:
 
 ```python
 from toolkit_adapters import ToolkitAdapter
+from local_code_agent_with_toolkit import run_agent_loop
 
 adapter = ToolkitAdapter(".")
+adapter.editor.auto_apply = True
 
-# 1. Search the live web
-print(adapter.dispatch("web_search", {"query": "Python 3.12 release features"}))
+# Execute an autonomous multi-step goal
+result = run_agent_loop(
+    adapter=adapter,
+    user_prompt="Inspect the codebase, check list_skills(), and summarize search_symbols for 'parse_tool_calls'",
+    max_turns=10
+)
 
-# 2. Extract content from a web page
-print(adapter.dispatch("fetch_web_page", {"url": "https://docs.python.org/3/whatsnew/3.12.html"}))
-
-# 3. Discover available skills
-print(adapter.dispatch("list_skills", {}))
-
-# 4. Inspect a skill overview
-print(adapter.dispatch("get_skill", {"skill_name": "web_search"}))
-
-# 5. Read reference documentation from a skill
-print(adapter.dispatch("read_skill_resource", {
-    "skill_name": "web_search",
-    "resource_rel_path": "references/providers_guide.md"
-}))
-
-# 6. Run an automated script from a skill
-print(adapter.dispatch("execute_skill_script", {
-    "skill_name": "web_search",
-    "script_name": "scripts/search_and_summarize.py",
-    "args": ["FastAPI tutorial"]
-}))
+print(result["final_response"])
 ```
