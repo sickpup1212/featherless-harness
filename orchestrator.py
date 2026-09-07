@@ -1,0 +1,329 @@
+# local_agent/orchestrator.py
+from typing import List, Dict, Optional, Callable
+from pathlib import Path
+from dataclasses import dataclass, field
+from enum import Enum
+import json
+
+
+class AgentCommand(Enum):
+    """Commands an agent can execute."""
+    EXPLORE_PROJECT = "explore_project"
+    READ_FILE = "read_file"
+    READ_CHUNK = "read_chunk"
+    LIST_SYMBOLS = "list_symbols"
+    SEARCH_SYMBOLS = "search_symbols"
+    GET_FILE_OVERVIEW = "get_file_overview"
+    GET_PROJECT_INDEX = "get_project_index"
+    REPLACE_CONTENT = "replace_content"
+    INSERT_CONTENT = "insert_content"
+    DELETE_CONTENT = "delete_content"
+    CREATE_FILE = "create_file"
+    GET_PENDING_EDITS = "get_pending_edits"
+    APPLY_EDITS = "apply_edits"
+    UNDO_EDIT = "undo_edit"
+    RUN_SHELL = "run_shell"
+    GET_WORKDIR = "get_workdir"
+
+
+@dataclass
+class AgentResponse:
+    """Response from an agent command."""
+    success: bool
+    command: AgentCommand
+    content: str
+    metadata: Dict = field(default_factory=dict)
+    error: Optional[str] = None
+    
+    def to_text(self) -> str:
+        """Convert response to text format for agent consumption."""
+        if not self.success:
+            return f"ERROR: {self.error}"
+        
+        if self.content:
+            return self.content
+        
+        return "OK"
+
+
+class LocalAgent:
+    """Agent that can work with local code projects."""
+    
+    def __init__(self, project_path: str, 
+                 auto_apply_edits: bool = False,
+                 max_file_lines: int = 5000):
+        self.project_root = Path(project_path).resolve()
+        self.auto_apply = auto_apply_edits
+        self.max_file_lines = max_file_lines
+        
+        # Initialize tools
+        from .toolkit.filesystem import ProjectExplorer
+        from .toolkit.code_reader import CodeReader, ProjectIndex
+        from .toolkit.code_editor import CodeEditor
+        
+        self.explorer = ProjectExplorer(str(self.project_root))
+        self.reader = CodeReader(self.project_root)
+        self.editor = CodeEditor(self.project_root)
+        self.index = ProjectIndex(self.project_root)
+        
+        # Build initial index
+        self.index.build_index()
+        
+        # Command history
+        self.history: List[AgentResponse] = []
+        
+        # Available tools description for the agent
+        self.tools = self._get_tools_description()
+    
+    def _get_tools_description(self) -> str:
+        """Get description of available tools for the agent."""
+        return """
+## Available Tools
+
+### Exploration
+- `explore_project(max_depth=N)` - View project tree structure
+- `get_project_index()` - Get indexed symbols summary
+- `list_symbols(file_path)` - List all functions/classes in a file
+- `search_symbols(query)` - Search for symbols across project
+
+### Reading
+- `read_file(file_path, start_line, end_line)` - Read file content
+- `read_chunk(file_path, focus_line, context)` - Read with context
+- `get_file_overview(file_path)` - Get file summary with symbols
+
+### Editing
+- `replace_content(file_path, start_line, end_line, new_content)`
+- `insert_content(file_path, after_line, new_content)`
+- `delete_content(file_path, start_line, end_line)`
+- `create_file(file_path, content)`
+- `get_pending_edits()` - Review pending changes
+- `apply_edits()` - Apply all pending changes
+- `undo_edit()` - Undo last change
+
+### Notes
+- Edits are queued by default; review before applying
+- Set auto_apply_edits=True to auto-apply edits
+- File paths are relative to project root
+"""
+    
+    def execute(self, command: AgentCommand, **kwargs) -> AgentResponse:
+        """Execute an agent command."""
+        response = AgentResponse(command=command)
+        
+        try:
+            if not self.project_root.exists():
+                response.success = False
+                response.error = f"Project not found: {self.project_root}"
+                return response
+            
+            result = self._handle_command(command, kwargs)
+            response.success = True
+            response.content = result if isinstance(result, str) else ""
+            response.metadata = {}
+            
+        except Exception as e:
+            response.success = False
+            response.error = str(e)
+        
+        self.history.append(response)
+        return response
+    
+    def _handle_command(self, command: AgentCommand, 
+                        kwargs: Dict) -> str:
+        """Route command to appropriate handler."""
+        handlers = {
+            AgentCommand.EXPLORE_PROJECT: self._cmd_explore,
+            AgentCommand.READ_FILE: self._cmd_read_file,
+            AgentCommand.READ_CHUNK: self._cmd_read_chunk,
+            AgentCommand.LIST_SYMBOLS: self._cmd_list_symbols,
+            AgentCommand.SEARCH_SYMBOLS: self._cmd_search_symbols,
+            AgentCommand.GET_FILE_OVERVIEW: self._cmd_file_overview,
+            AgentCommand.GET_PROJECT_INDEX: self._cmd_project_index,
+            AgentCommand.REPLACE_CONTENT: self._cmd_replace,
+            AgentCommand.INSERT_CONTENT: self._cmd_insert,
+            AgentCommand.DELETE_CONTENT: self._cmd_delete,
+            AgentCommand.CREATE_FILE: self._cmd_create_file,
+            AgentCommand.GET_PENDING_EDITS: self._cmd_pending_edits,
+            AgentCommand.APPLY_EDITS: self._cmd_apply_edits,
+            AgentCommand.UNDO_EDIT: self._cmd_undo,
+        }
+        
+        handler = handlers.get(command)
+        if not handler:
+            raise ValueError(f"Unknown command: {command}")
+        
+        return handler(kwargs)
+    
+    # Command handlers
+    
+    def _cmd_explore(self, kwargs: Dict) -> str:
+        max_depth = kwargs.get('max_depth', 3)
+        return self.explorer.get_tree_string(max_depth)
+    
+    def _cmd_read_file(self, kwargs: Dict) -> str:
+        file_path = Path(kwargs.get('file_path', ''))
+        start = kwargs.get('start_line')
+        end = kwargs.get('end_line')
+        
+        if not file_path.is_absolute():
+            file_path = self.project_root / file_path
+        
+        content = self.reader.read_file(file_path, start, end, include_line_numbers=True)
+        
+        # Check size
+        line_count = content.count('\n')
+        if line_count > self.max_file_lines:
+            return (content[:self.max_file_lines * 80] + 
+                    f"\n\n... [truncated: {line_count} total lines, showing first {self.max_file_lines}]")
+        
+        return content
+    
+    def _cmd_read_chunk(self, kwargs: Dict) -> str:
+        file_path = Path(kwargs.get('file_path', ''))
+        focus = kwargs.get('focus_line', 1)
+        context = kwargs.get('context_lines', 10)
+        
+        if not file_path.is_absolute():
+            file_path = self.project_root / file_path
+        
+        return self.reader.read_with_context(file_path, focus, context)
+    
+    def _cmd_list_symbols(self, kwargs: Dict) -> str:
+        file_path = Path(kwargs.get('file_path', ''))
+        
+        if not file_path.is_absolute():
+            file_path = self.project_root / file_path
+        
+        return self.reader.get_file_symbols(file_path)
+    
+    def _cmd_search_symbols(self, kwargs: Dict) -> str:
+        query = kwargs.get('query', '')
+        results = self.index.search_symbols(query)
+        
+        if not results:
+            return f"No symbols found matching '{query}'"
+        
+        lines = [f"## Search Results for '{query}' ({len(results)} found)"]
+        for r in results[:20]:  # Limit results
+            lines.append(f"- `{r['file']}`: {r['symbol']['name']} ({r['symbol']['kind']})")
+        
+        return "\n".join(lines)
+    
+    def _cmd_file_overview(self, kwargs: Dict) -> str:
+        file_path = Path(kwargs.get('file_path', ''))
+        
+        if not file_path.is_absolute():
+            file_path = self.project_root / file_path
+        
+        return self.reader.get_file_overview(file_path)
+    
+    def _cmd_project_index(self, kwargs: Dict) -> str:
+        return self.index.get_index_summary()
+    
+    def _cmd_replace(self, kwargs: Dict) -> str:
+        file_path = Path(kwargs.get('file_path', ''))
+        start = kwargs.get('start_line')
+        end = kwargs.get('end_line')
+        new_content = kwargs.get('new_content', '')
+        desc = kwargs.get('description', '')
+        
+        if not file_path.is_absolute():
+            file_path = self.project_root / file_path
+        
+        edit = self.editor.replace_lines(file_path, start, end, new_content, desc)
+        
+        if self.auto_apply:
+            edit.apply()
+            return f"Applied: {desc}"
+        
+        return f"Pending: {desc}\nEdit queued (use apply_edits to apply)"
+    
+    def _cmd_insert(self, kwargs: Dict) -> str:
+        file_path = Path(kwargs.get('file_path', ''))
+        after = kwargs.get('after_line')
+        new_content = kwargs.get('new_content', '')
+        desc = kwargs.get('description', '')
+        
+        if not file_path.is_absolute():
+            file_path = self.project_root / file_path
+        
+        edit = self.editor.insert_after_line(file_path, after, new_content, desc)
+        
+        if self.auto_apply:
+            edit.apply()
+            return f"Applied: {desc}"
+        
+        return f"Pending: {desc}"
+    
+    def _cmd_delete(self, kwargs: Dict) -> str:
+        file_path = Path(kwargs.get('file_path', ''))
+        start = kwargs.get('start_line')
+        end = kwargs.get('end_line')
+        desc = kwargs.get('description', '')
+        
+        if not file_path.is_absolute():
+            file_path = self.project_root / file_path
+        
+        edit = self.editor.delete_lines(file_path, start, end, desc)
+        
+        if self.auto_apply:
+            edit.apply()
+            return f"Applied: {desc}"
+        
+        return f"Pending: {desc}"
+    
+    def _cmd_create_file(self, kwargs: Dict) -> str:
+        file_path = Path(kwargs.get('file_path', ''))
+        content = kwargs.get('content', '')
+        desc = kwargs.get('description', '')
+        
+        if not file_path.is_absolute():
+            file_path = self.project_root / file_path
+        
+        edit = self.editor.create_file(file_path, content, desc)
+        
+        if self.auto_apply:
+            edit.apply()
+            return f"Applied: {desc}"
+        
+        return f"Pending: {desc}"
+    
+    def _cmd_pending_edits(self, kwargs: Dict) -> str:
+        return self.editor.get_pending_edits_summary()
+    
+    def _cmd_apply_edits(self, kwargs: Dict) -> str:
+        applied = self.editor.apply_pending_edits(review_changes=not self.auto_apply)
+        
+        if not applied:
+            return "No edits applied."
+        
+        lines = [f"Applied {len(applied)} edit(s):"]
+        for edit in applied:
+            lines.append(f"- {edit.description} ({edit.file_path.name})")
+        
+        return "\n".join(lines)
+    
+    def _cmd_undo(self, kwargs: Dict) -> str:
+        if self.editor.undo_last_edit():
+            return "Undid last edit."
+        return "No edits to undo."
+    
+    def get_context_summary(self) -> str:
+        """Get a summary of the current project state for the agent."""
+        tree = self.explorer.get_tree_string(max_depth=2)
+        index = self.index.get_index_summary()
+        
+        return f"""
+## Current Project State
+
+### Project Root
+{self.project_root}
+
+### Tree Structure
+{tree}
+
+### Index Summary
+{index}
+
+{self.tools}
+"""
