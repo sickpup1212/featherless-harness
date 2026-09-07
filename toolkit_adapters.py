@@ -1,15 +1,16 @@
 # local_agent/toolkit_adapters.py
 """
 Adapter layer: exposes your original toolkit classes/functions as named
-tools the agent loop can dispatch. No changes needed to your original code.
+tools the agent loop can dispatch.
 """
 import json
 import inspect
-from typing import Callable, Dict, Any
+from typing import Callable, Dict, Any, List
 from pathlib import Path
 from filesystem import ProjectExplorer
 from code_reader import CodeReader, ProjectIndex
 from code_editor import CodeEditor
+from skill_manager import SkillManager
 
 
 class ToolkitAdapter:
@@ -23,6 +24,7 @@ class ToolkitAdapter:
         self.reader = CodeReader(self.root)
         self.editor = CodeEditor(self.root)
         self.index = ProjectIndex(self.root)
+        self.skill_manager = SkillManager(project_root=self.root)
 
         # Build the index once here
         self.index.build_index()
@@ -47,6 +49,10 @@ class ToolkitAdapter:
         self.tools["list_pending_edits"] = self._wrap(self.editor.get_pending_edits_summary)
         self.tools["apply_pending_edits"] = self._wrap(self._apply_pending_edits)
         self.tools["undo_edit"] = self._wrap(self.editor.undo_last_edit)
+        self.tools["list_skills"] = self._wrap(self._list_skills)
+        self.tools["get_skill"] = self._wrap(self._get_skill)
+        self.tools["read_skill_resource"] = self._wrap(self._read_skill_resource)
+        self.tools["execute_skill_script"] = self._wrap(self._execute_skill_script)
         self.tools["help"] = self._wrap(self._help)
 
     def _wrap_explore(self, args: Dict[str, Any]) -> str:
@@ -219,6 +225,41 @@ class ToolkitAdapter:
             "edits": [{"description": e.description, "file": str(e.file_path)} for e in applied],
         })
 
+    # ---------- Skill tools ----------
+    def _list_skills(self, args: Dict[str, Any] = None) -> str:
+        skills = self.skill_manager.list_skills()
+        if not skills:
+            return "No skills found."
+        lines = ["## Available Skills:"]
+        for s in skills:
+            lines.append(f"- **{s['name']}** (v{s['version']}): {s['description']}")
+            if s['tags']:
+                lines.append(f"  Tags: {', '.join(s['tags'])}")
+        return "\n".join(lines)
+
+    def _get_skill(self, args: Dict[str, Any]) -> str:
+        skill_name = str(args.get("skill_name", "")).strip().strip("'\"")
+        if not skill_name:
+            return "ERROR: Please provide a skill_name."
+        return self.skill_manager.get_skill_overview(skill_name)
+
+    def _read_skill_resource(self, args: Dict[str, Any]) -> str:
+        skill_name = str(args.get("skill_name", "")).strip().strip("'\"")
+        resource_path = str(args.get("resource_rel_path", "")).strip().strip("'\"")
+        if not skill_name or not resource_path:
+            return "ERROR: skill_name and resource_rel_path are required."
+        return self.skill_manager.read_skill_resource(skill_name, resource_path)
+
+    def _execute_skill_script(self, args: Dict[str, Any]) -> str:
+        skill_name = str(args.get("skill_name", "")).strip().strip("'\"")
+        script_name = str(args.get("script_name", "")).strip().strip("'\"")
+        script_args = args.get("args")
+        if isinstance(script_args, str):
+            script_args = [script_args]
+        if not skill_name or not script_name:
+            return "ERROR: skill_name and script_name are required."
+        return self.skill_manager.execute_skill_script(skill_name, script_name, script_args)
+
     def _help(self, args: Dict[str, Any] = None) -> str:
         return """
 ## Available Tools
@@ -245,6 +286,12 @@ class ToolkitAdapter:
 - list_pending_edits() -> str
 - apply_pending_edits() -> json
 - undo_edit() -> str
+
+### Skills Framework
+- list_skills() -> str
+- get_skill(skill_name: str) -> str
+- read_skill_resource(skill_name: str, resource_rel_path: str) -> str
+- execute_skill_script(skill_name: str, script_name: str, args: list?) -> str
 """
 
     # ---------- generic wrapper ----------
@@ -315,5 +362,9 @@ class ToolkitAdapter:
             "list_pending_edits": {},
             "apply_pending_edits": {},
             "undo_edit": {},
+            "list_skills": {},
+            "get_skill": {"skill_name": "str"},
+            "read_skill_resource": {"skill_name": "str", "resource_rel_path": "str"},
+            "execute_skill_script": {"skill_name": "str", "script_name": "str", "args": "list?"},
             "help": {},
         }

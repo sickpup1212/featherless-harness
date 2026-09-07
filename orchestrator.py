@@ -23,6 +23,10 @@ class AgentCommand(Enum):
     GET_PENDING_EDITS = "get_pending_edits"
     APPLY_EDITS = "apply_edits"
     UNDO_EDIT = "undo_edit"
+    LIST_SKILLS = "list_skills"
+    GET_SKILL = "get_skill"
+    READ_SKILL_RESOURCE = "read_skill_resource"
+    EXECUTE_SKILL_SCRIPT = "execute_skill_script"
     RUN_SHELL = "run_shell"
     GET_WORKDIR = "get_workdir"
 
@@ -48,7 +52,7 @@ class AgentResponse:
 
 
 class LocalAgent:
-    """Agent that can work with local code projects."""
+    """Agent that can work with local code projects and skills."""
 
     def __init__(self, project_path: str,
                  auto_apply_edits: bool = False,
@@ -61,11 +65,13 @@ class LocalAgent:
         from filesystem import ProjectExplorer
         from code_reader import CodeReader, ProjectIndex
         from code_editor import CodeEditor
+        from skill_manager import SkillManager
 
         self.explorer = ProjectExplorer(str(self.project_root))
         self.reader = CodeReader(self.project_root)
         self.editor = CodeEditor(self.project_root)
         self.index = ProjectIndex(self.project_root)
+        self.skill_manager = SkillManager(project_root=self.project_root)
 
         # Build initial index
         self.index.build_index()
@@ -100,6 +106,12 @@ class LocalAgent:
 - `get_pending_edits()` - Review pending changes
 - `apply_edits()` - Apply all pending changes
 - `undo_edit()` - Undo last change
+
+### Skills System
+- `list_skills()` - Discover available skills
+- `get_skill(skill_name)` - View skill instructions and capabilities
+- `read_skill_resource(skill_name, resource_rel_path)` - Read reference doc or schema from skill
+- `execute_skill_script(skill_name, script_name, args)` - Run script from skill
 
 ### Miscellaneous
 - `run_shell(command)` - Execute shell command
@@ -151,6 +163,10 @@ class LocalAgent:
             AgentCommand.GET_PENDING_EDITS: self._cmd_pending_edits,
             AgentCommand.APPLY_EDITS: self._cmd_apply_edits,
             AgentCommand.UNDO_EDIT: self._cmd_undo,
+            AgentCommand.LIST_SKILLS: self._cmd_list_skills,
+            AgentCommand.GET_SKILL: self._cmd_get_skill,
+            AgentCommand.READ_SKILL_RESOURCE: self._cmd_read_skill_resource,
+            AgentCommand.EXECUTE_SKILL_SCRIPT: self._cmd_execute_skill_script,
             AgentCommand.RUN_SHELL: self._cmd_run_shell,
             AgentCommand.GET_WORKDIR: self._cmd_workdir,
         }
@@ -310,6 +326,32 @@ class LocalAgent:
         if self.editor.undo_last_edit():
             return "Undid last edit."
         return "No edits to undo."
+
+    def _cmd_list_skills(self, kwargs: Dict) -> str:
+        skills = self.skill_manager.list_skills()
+        if not skills:
+            return "No skills found."
+        lines = ["## Available Skills:"]
+        for s in skills:
+            lines.append(f"- **{s['name']}** (v{s['version']}): {s['description']}")
+        return "\n".join(lines)
+
+    def _cmd_get_skill(self, kwargs: Dict) -> str:
+        skill_name = kwargs.get("skill_name", "")
+        return self.skill_manager.get_skill_overview(skill_name)
+
+    def _cmd_read_skill_resource(self, kwargs: Dict) -> str:
+        skill_name = kwargs.get("skill_name", "")
+        res_path = kwargs.get("resource_rel_path", "")
+        return self.skill_manager.read_skill_resource(skill_name, res_path)
+
+    def _cmd_execute_skill_script(self, kwargs: Dict) -> str:
+        skill_name = kwargs.get("skill_name", "")
+        script_name = kwargs.get("script_name", "")
+        args = kwargs.get("args")
+        if isinstance(args, str):
+            args = [args]
+        return self.skill_manager.execute_skill_script(skill_name, script_name, args)
 
     def _cmd_workdir(self, kwargs: Dict) -> str:
         return str(self.project_root)

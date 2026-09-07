@@ -77,7 +77,7 @@ def parse_inline_args(args_str: str) -> Dict[str, Any]:
         args[key] = value
     return args
 
-SYSTEM_TEMPLATE = """You are a coding assistant with access to local filesystem tools.
+SYSTEM_TEMPLATE = """You are a coding assistant with access to local filesystem tools and a SKILL framework.
 Project root: {project_root}
 
 You have access to the following tools. Use them by emitting a tool call
@@ -95,6 +95,10 @@ Examples:
 - call:read_file{{rel_path: app.py, start_line: 1, end_line: 50}}
 - call:get_file_overview{{rel_path: app.py}}
 - call:get_project_index{{}}
+- call:list_skills{{}}
+- call:get_skill{{skill_name: code_review}}
+- call:read_skill_resource{{skill_name: code_review, resource_rel_path: references/checklist.md}}
+- call:execute_skill_script{{skill_name: code_review, script_name: scripts/lint.py}}
 
 Tool schemas:
 {tool_schemas}
@@ -108,6 +112,7 @@ General guidance:
 - Use explore() first to understand the project structure.
 - Use read_file() or read_chunk() to examine code.
 - Use search_symbols() to find functions/classes across the project.
+- Use list_skills() and get_skill() to discover domain workflows, references, or specialized scripts.
 - Edits are queued by default; call apply_pending_edits() to commit them.
 - Always list_pending_edits() before applying to review changes.
 """
