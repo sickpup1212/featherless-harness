@@ -4,22 +4,32 @@ import json
 import re
 from typing import List, Dict, Any, Optional
 from pathlib import Path
-from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
-from langchain_core.runnables import RunnableLambda
-from langchain_core.messages import ToolMessage, AIMessage, HumanMessage, SystemMessage
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+try:
+    from langchain_openai import ChatOpenAI
+    from langchain_core.runnables import RunnableLambda
+    from langchain_core.messages import ToolMessage, AIMessage, HumanMessage, SystemMessage
+    LANGCHAIN_AVAILABLE = True
+except ImportError:
+    LANGCHAIN_AVAILABLE = False
+
 from toolkit_adapters import ToolkitAdapter
 
-load_dotenv()
-FEATHERLESS_API_KEY = os.getenv("FEATHERLESSAI_API_KEY")
+if LANGCHAIN_AVAILABLE:
+    FEATHERLESS_API_KEY = os.getenv("FEATHERLESSAI_API_KEY", "")
+    llm = ChatOpenAI(
+        api_key=FEATHERLESS_API_KEY,
+        base_url="https://api.featherless.ai/v1",
+        model="TrevorJS/gemma-4-26B-A4B-it-uncensored",
+    )
 
-llm = ChatOpenAI(
-    api_key=FEATHERLESS_API_KEY,
-    base_url="https://api.featherless.ai/v1",
-    model="TrevorJS/gemma-4-26B-A4B-it-uncensored",
-)
-
-TOOL_CALL_RE = re.compile(r"call:(\w+)\{([^}]+)\}(?:\s*```\w*\s*(\{.*?\})\s*```)?", re.DOTALL)
+TOOL_CALL_RE = re.compile(r"call:(\w+)\{([^}]*)\}(?:\s*```\w*\s*(\{.*?\})\s*```)?", re.DOTALL)
 MAX_TOOL_CALLS_PER_TURN = 20
 
 def parse_tool_calls_from_text(text: str) -> List[Dict[str, Any]]:
@@ -27,20 +37,20 @@ def parse_tool_calls_from_text(text: str) -> List[Dict[str, Any]]:
     for m in TOOL_CALL_RE.finditer(text):
         tool_name = m.group(1)
         args_str = m.group(2).strip()
-        json_str = m.group(3)        
+        json_str = m.group(3)
         args = {}
         if json_str:
             try:
                 payload = json.loads(json_str)
                 args = payload.get("arguments", {})
                 # Strip quotes from all string values
-                args = {k: v.strip().strip("'\"") if isinstance(v, str) else v 
+                args = {k: v.strip().strip("'\"") if isinstance(v, str) else v
                         for k, v in args.items()}
             except json.JSONDecodeError:
                 args = parse_inline_args(args_str)
         else:
-            args = parse_inline_args(args_str)        
-        calls.append({"name": tool_name, "arguments": args})    
+            args = parse_inline_args(args_str)
+        calls.append({"name": tool_name, "arguments": args})
     return calls
 
 def parse_inline_args(args_str: str) -> Dict[str, Any]:
@@ -50,10 +60,10 @@ def parse_inline_args(args_str: str) -> Dict[str, Any]:
         key = m.group(1)
         # Get the value from whichever capture group matched
         value = m.group(2) or m.group(3) or m.group(4)
-        
+
         # Strip surrounding quotes if present
         value = value.strip().strip("'\"")
-        
+
         if value.isdigit():
             value = int(value)
         else:
@@ -67,7 +77,7 @@ def parse_inline_args(args_str: str) -> Dict[str, Any]:
         args[key] = value
     return args
 
-SYSTEM_TEMPLATE = """You are a coding assistant with access to local filesystem tools.
+SYSTEM_TEMPLATE = """You are a coding assistant with access to local filesystem tools, a SKILL framework, and web search capabilities.
 Project root: {project_root}
 
 You have access to the following tools. Use them by emitting a tool call
@@ -85,6 +95,11 @@ Examples:
 - call:read_file{{rel_path: app.py, start_line: 1, end_line: 50}}
 - call:get_file_overview{{rel_path: app.py}}
 - call:get_project_index{{}}
+- call:list_skills{{}}
+- call:get_skill{{skill_name: code_review}}
+- call:web_search{{query: python asyncio tutorial, max_results: 5}}
+- call:fetch_web_page{{url: https://docs.python.org/3/library/asyncio.html}}
+- call:search_code_docs{{query: create_task, topic: python}}
 
 Tool schemas:
 {tool_schemas}
@@ -98,6 +113,7 @@ General guidance:
 - Use explore() first to understand the project structure.
 - Use read_file() or read_chunk() to examine code.
 - Use search_symbols() to find functions/classes across the project.
+- Use web_search(), fetch_web_page(), and search_code_docs() to find online documentation, APIs, and external library usages.
 - Edits are queued by default; call apply_pending_edits() to commit them.
 - Always list_pending_edits() before applying to review changes.
 """
@@ -116,6 +132,9 @@ def build_system(project_root: str, max_tool_calls: int, adapter: ToolkitAdapter
 
 def run_agent_loop(adapter: ToolkitAdapter, user_prompt: str,
                    max_turns: int = 1, max_tool_calls: int = MAX_TOOL_CALLS_PER_TURN):
+    if not LANGCHAIN_AVAILABLE:
+        raise RuntimeError("LangChain is required for run_agent_loop")
+
     project_root = adapter.root
     system = build_system(project_root, max_tool_calls, adapter)
 
@@ -169,7 +188,7 @@ def run_agent_loop(adapter: ToolkitAdapter, user_prompt: str,
             })
 
             tool_result_text = f"[Tool Result: {name}({json.dumps(args)})]\n{result}"
-            
+
             tool_msg = ToolMessage(
                 content=tool_result_text,
                 tool_call_id=tool_call_id,
@@ -183,7 +202,7 @@ def run_agent_loop(adapter: ToolkitAdapter, user_prompt: str,
             ai_msg = llm.invoke(messages)
             final_response = ai_msg.content if hasattr(ai_msg, "content") else str(ai_msg)
             break
-        
+
         # Give LLM a chance to continue or conclude
         follow_up = HumanMessage(content="Review the tool results above. If you have enough information, provide your final answer. Otherwise, call more tools as needed.")
         messages.append(follow_up)
@@ -223,4 +242,7 @@ def workflow(inputs: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # Runnable wrapper matching your FeatherlessAI format
-workflow_runnable = RunnableLambda(workflow)
+if LANGCHAIN_AVAILABLE:
+    workflow_runnable = RunnableLambda(workflow)
+else:
+    workflow_runnable = None
