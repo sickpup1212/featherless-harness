@@ -4,7 +4,18 @@ A comprehensive harness and local code agent toolkit for Featherless AI models.
 
 ## Overview
 
-`featherless-harness` provides a set of tools for local code exploration, AST symbol analysis, line-level code editing, agent orchestration, an extensible **SKILL system**, an LLM-optimized **Web Search framework**, and an **Autonomous Agent Execution Loop** (similar to Claude Code or Hermes).
+`featherless-harness` provides a set of tools for local code exploration, AST symbol analysis, line-level code editing, agent orchestration, an extensible **SKILL system**, an LLM-optimized **Web Search framework**, **Crawl4AI Asynchronous Web Crawling**, and an **Autonomous Agent Execution Loop** (similar to Claude Code or Hermes).
+
+---
+
+## Crawl4AI & Asynchronous Web Crawling (`crawl4ai_toolkit.py`)
+
+The framework integrates Crawl4AI for high-performance, asynchronous web crawling and markdown extraction with full async support across `ToolkitAdapter` and `LocalAgent`.
+
+### Features
+- **`crawl_url`**: Asynchronously crawls a webpage and extracts clean Markdown (using `crawl4ai` when installed, with an automatic async fallback).
+- **`deep_crawl`**: Asynchronously crawls an entire domain up to `max_pages` and `max_depth`.
+- **`extract_structured_data`**: Extracts structured text and schema targets from webpages.
 
 ---
 
@@ -96,10 +107,13 @@ The framework exposes the following tools via `ToolkitAdapter` and `LocalAgent`:
 - `read_skill_resource(skill_name: str, resource_rel_path: str)`: Read reference docs or schemas from a skill.
 - `execute_skill_script(skill_name: str, script_name: str, args: list?)`: Execute a utility script from a skill directory.
 
-### Web Search
+### Web Search & Async Crawling
 - `web_search(query: str, max_results: int?)`: Live web search.
 - `fetch_web_page(url: str, max_chars: int?)`: Extract readable page content.
 - `search_code_docs(query: str, topic: str?)`: Targeted documentation search.
+- `crawl_url(url: str, word_count_threshold: int?, max_chars: int?)`: Async Crawl4AI web crawl.
+- `deep_crawl(start_url: str, max_pages: int?, max_depth: int?)`: Async domain crawler.
+- `extract_structured_data(url: str, schema_description: str?)`: Extract structured text and schemas.
 
 ---
 
@@ -107,17 +121,15 @@ The framework exposes the following tools via `ToolkitAdapter` and `LocalAgent`:
 
 ```python
 from toolkit_adapters import ToolkitAdapter
-from local_code_agent_with_toolkit import run_agent_loop
 
 adapter = ToolkitAdapter(".")
-adapter.editor.auto_apply = True
 
-# Execute an autonomous multi-step goal
-result = run_agent_loop(
-    adapter=adapter,
-    user_prompt="Inspect the codebase, check list_skills(), and summarize search_symbols for 'parse_tool_calls'",
-    max_turns=10
-)
+# 1. Asynchronously crawl a webpage using Crawl4AI
+print(adapter.dispatch("crawl_url", {"url": "https://www.python.org", "max_chars": 500}))
 
-print(result["final_response"])
+# 2. Perform deep multi-page domain crawl
+print(adapter.dispatch("deep_crawl", {"start_url": "https://docs.python.org", "max_pages": 3}))
+
+# 3. Live web search
+print(adapter.dispatch("web_search", {"query": "Python 3.12 release features"}))
 ```

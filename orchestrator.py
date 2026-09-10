@@ -4,6 +4,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from enum import Enum
 import json
+import asyncio
 import subprocess
 
 
@@ -30,6 +31,9 @@ class AgentCommand(Enum):
     WEB_SEARCH = "web_search"
     FETCH_WEB_PAGE = "fetch_web_page"
     SEARCH_CODE_DOCS = "search_code_docs"
+    CRAWL_URL = "crawl_url"
+    DEEP_CRAWL = "deep_crawl"
+    EXTRACT_STRUCTURED_DATA = "extract_structured_data"
     RUN_SHELL = "run_shell"
     GET_WORKDIR = "get_workdir"
 
@@ -55,7 +59,7 @@ class AgentResponse:
 
 
 class LocalAgent:
-    """Agent that can work with local code projects, skills, and web search."""
+    """Agent that can work with local code projects, skills, web search, and async crawlers."""
 
     def __init__(self, project_path: str,
                  auto_apply_edits: bool = False,
@@ -70,6 +74,7 @@ class LocalAgent:
         from code_editor import CodeEditor
         from skill_manager import SkillManager
         from web_search import WebSearchManager
+        from crawl4ai_toolkit import Crawl4AIToolkit
 
         self.explorer = ProjectExplorer(str(self.project_root))
         self.reader = CodeReader(self.project_root)
@@ -77,6 +82,7 @@ class LocalAgent:
         self.index = ProjectIndex(self.project_root)
         self.skill_manager = SkillManager(project_root=self.project_root)
         self.web_search_manager = WebSearchManager()
+        self.crawl_toolkit = Crawl4AIToolkit()
 
         # Build initial index
         self.index.build_index()
@@ -118,10 +124,13 @@ class LocalAgent:
 - `read_skill_resource(skill_name, resource_rel_path)` - Read reference doc or schema from skill
 - `execute_skill_script(skill_name, script_name, args)` - Run script from skill
 
-### Web Search & Content Fetching
+### Web Search & Async Crawling
 - `web_search(query, max_results)` - Search the live web
 - `fetch_web_page(url, max_chars)` - Extract readable markdown content from webpage
 - `search_code_docs(query, topic)` - Search library/framework documentation
+- `crawl_url(url, word_count_threshold, max_chars)` - Async web crawl
+- `deep_crawl(start_url, max_pages, max_depth)` - Async multi-page domain crawler
+- `extract_structured_data(url, schema_description)` - Extract structured schemas
 
 ### Miscellaneous
 - `run_shell(command)` - Execute shell command
@@ -180,6 +189,9 @@ class LocalAgent:
             AgentCommand.WEB_SEARCH: self._cmd_web_search,
             AgentCommand.FETCH_WEB_PAGE: self._cmd_fetch_web_page,
             AgentCommand.SEARCH_CODE_DOCS: self._cmd_search_code_docs,
+            AgentCommand.CRAWL_URL: self._cmd_crawl_url,
+            AgentCommand.DEEP_CRAWL: self._cmd_deep_crawl,
+            AgentCommand.EXTRACT_STRUCTURED_DATA: self._cmd_extract_structured_data,
             AgentCommand.RUN_SHELL: self._cmd_run_shell,
             AgentCommand.GET_WORKDIR: self._cmd_workdir,
         }
@@ -380,6 +392,22 @@ class LocalAgent:
         query = kwargs.get("query", "")
         topic = kwargs.get("topic", "python")
         return self.web_search_manager.search_code_docs(query, topic=topic)
+
+    def _cmd_crawl_url(self, kwargs: Dict) -> str:
+        url = kwargs.get("url", "")
+        max_chars = kwargs.get("max_chars", 5000)
+        return asyncio.run(self.crawl_toolkit.crawl_url(url, max_chars=max_chars))
+
+    def _cmd_deep_crawl(self, kwargs: Dict) -> str:
+        start_url = kwargs.get("start_url", "")
+        max_pages = kwargs.get("max_pages", 5)
+        max_depth = kwargs.get("max_depth", 2)
+        return asyncio.run(self.crawl_toolkit.deep_crawl(start_url, max_pages=max_pages, max_depth=max_depth))
+
+    def _cmd_extract_structured_data(self, kwargs: Dict) -> str:
+        url = kwargs.get("url", "")
+        schema = kwargs.get("schema_description", "")
+        return asyncio.run(self.crawl_toolkit.extract_structured_data(url, schema_description=schema))
 
     def _cmd_workdir(self, kwargs: Dict) -> str:
         return str(self.project_root)
