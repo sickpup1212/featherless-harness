@@ -2,7 +2,8 @@
 test_mcp.py
 
 Unit and integration tests for MCPManager, mcp.json/mpc.json parsing,
-OAuth redirection probing, ToolkitAdapter MCP integration, and LocalAgent MCP commands.
+OAuth redirection probing, OAuth token persistence, ToolkitAdapter MCP integration,
+and LocalAgent MCP commands.
 """
 
 import json
@@ -78,20 +79,43 @@ class TestMCPIntegration(unittest.TestCase):
 
         manager = MCPManager(project_root=str(self.root))
 
-        # Probe reddit URL directly
-        prompt = manager.probe_oauth_flow("reddit", "https://mcp.mcpbundles.com/bundle/reddit", {})
-        self.assertIsNotNone(prompt)
-        self.assertIn("OAuth Authentication Required", prompt)
-        self.assertIn("reddit", prompt)
-        self.assertIn("Authorization", prompt)
+        # Discover reddit URL metadata directly
+        meta = manager.discover_oauth_metadata("https://mcp.mcpbundles.com/bundle/reddit", {})
+        self.assertTrue(meta.get("requires_auth"))
+        self.assertIn("authorization_endpoint", meta)
 
-    def test_setting_custom_headers_and_tokens(self):
+    def test_token_persistence_and_auto_injection(self):
+        mpc_path = self.root / "mpc.json"
+        with open(mpc_path, "w", encoding="utf-8") as f:
+            json.dump(self.sample_mcp_config, f)
+
         manager = MCPManager(project_root=str(self.root))
-        manager.servers_config = {"custom-server": {"url": "https://example.com/mcp"}}
+        manager.set_server_token("reddit", "sample_oauth_access_token_xyz")
 
-        manager.set_server_token("custom-server", "secret_token_123")
-        headers = manager.servers_config["custom-server"].get("headers", {})
-        self.assertEqual(headers.get("Authorization"), "Bearer secret_token_123")
+        # Verify saved token file exists
+        token_file = self.root / ".mcp_tokens.json"
+        self.assertTrue(token_file.exists())
+        with open(token_file, "r") as f:
+            tokens = json.load(f)
+        self.assertEqual(tokens["reddit"]["access_token"], "sample_oauth_access_token_xyz")
+
+        # Re-initialize manager and verify Bearer token injection
+        new_manager = MCPManager(project_root=str(self.root))
+        reddit_cfg = new_manager.servers_config["reddit"]
+        self.assertIn("headers", reddit_cfg)
+        self.assertEqual(reddit_cfg["headers"]["Authorization"], "Bearer sample_oauth_access_token_xyz")
+
+    def test_get_mcp_auth_status_adapter(self):
+        mpc_path = self.root / "mpc.json"
+        with open(mpc_path, "w", encoding="utf-8") as f:
+            json.dump(self.sample_mcp_config, f)
+
+        adapter = ToolkitAdapter(project_root=str(self.root))
+        adapter.mcp_manager.set_server_token("reddit", "tok123")
+
+        status_res = adapter.dispatch("get_mcp_auth_status", {})
+        self.assertIn("reddit", status_res)
+        self.assertIn("Authenticated 🔑", status_res)
 
     @patch.object(MCPManager, "list_tools_async")
     @patch.object(MCPManager, "call_tool_async")

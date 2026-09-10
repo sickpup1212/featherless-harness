@@ -89,6 +89,8 @@ class ToolkitAdapter:
         self.tools["extract_structured_data"] = self._wrap(self.crawl_toolkit.extract_structured_data)
         self.tools["list_mcp_tools"] = self._wrap(self._list_mcp_tools)
         self.tools["call_mcp_tool"] = self._wrap(self._call_mcp_tool)
+        self.tools["authenticate_mcp_server"] = self._wrap(self._authenticate_mcp_server)
+        self.tools["get_mcp_auth_status"] = self._wrap(self._get_mcp_auth_status)
         self.tools["help"] = self._wrap(self._help)
 
     def _wrap_explore(self, args: Dict[str, Any]) -> str:
@@ -395,6 +397,25 @@ class ToolkitAdapter:
             return "ERROR: server_name and tool_name are required for call_mcp_tool."
         return self.mcp_manager.call_tool(server_name, tool_name, arguments)
 
+    def _authenticate_mcp_server(self, args: Dict[str, Any]) -> str:
+        server_name = str(args.get("server_name", "")).strip().strip("'\"")
+        port = int(args.get("port", 8089))
+        if not server_name:
+            return "ERROR: server_name is required for authenticate_mcp_server."
+        return self.mcp_manager.authenticate_server_oauth(server_name, port=port)
+
+    def _get_mcp_auth_status(self, args: Dict[str, Any] = None) -> str:
+        servers = self.mcp_manager.get_server_names()
+        if not servers:
+            return "No MCP servers configured."
+        lines = ["## MCP Server Authentication Status:"]
+        for s in servers:
+            has_token = s in self.mcp_manager.stored_tokens
+            cfg = self.mcp_manager.servers_config.get(s, {})
+            url_cmd = cfg.get("url") or cfg.get("command") or "N/A"
+            lines.append(f"- **{s}** ({url_cmd}): {'Authenticated 🔑' if has_token else 'Not Authenticated 🔒'}")
+        return "\n".join(lines)
+
     def _help(self, args: Dict[str, Any] = None) -> str:
         return """
 ## Available Tools
@@ -444,6 +465,8 @@ class ToolkitAdapter:
 ### MCP Integration
 - list_mcp_tools() -> str
 - call_mcp_tool(server_name: str, tool_name: str, arguments: dict?) -> str
+- authenticate_mcp_server(server_name: str, port: int?) -> str
+- get_mcp_auth_status() -> str
 """
 
     # ---------- generic wrapper supporting sync and async functions ----------
@@ -553,6 +576,8 @@ class ToolkitAdapter:
             "extract_structured_data": {"url": "str", "schema_description": "str?"},
             "list_mcp_tools": {},
             "call_mcp_tool": {"server_name": "str", "tool_name": "str", "arguments": "dict?"},
+            "authenticate_mcp_server": {"server_name": "str", "port": "int?"},
+            "get_mcp_auth_status": {},
             "help": {},
         }
 

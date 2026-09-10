@@ -39,6 +39,8 @@ class AgentCommand(Enum):
     EXTRACT_STRUCTURED_DATA = "extract_structured_data"
     LIST_MCP_TOOLS = "list_mcp_tools"
     CALL_MCP_TOOL = "call_mcp_tool"
+    AUTHENTICATE_MCP_SERVER = "authenticate_mcp_server"
+    GET_MCP_AUTH_STATUS = "get_mcp_auth_status"
     RUN_SHELL = "run_shell"
     GET_WORKDIR = "get_workdir"
 
@@ -150,6 +152,8 @@ class LocalAgent:
 ### MCP Integration
 - `list_mcp_tools()` - Discover available tools from configured MCP servers (mcp.json / mpc.json)
 - `call_mcp_tool(server_name, tool_name, arguments)` - Call a tool on an MCP server
+- `authenticate_mcp_server(server_name, port)` - Intercept and trigger browser OAuth login flow
+- `get_mcp_auth_status()` - View OAuth authentication status for all configured MCP servers
 
 ### Miscellaneous
 - `run_shell(command)` - Execute shell command
@@ -216,6 +220,8 @@ class LocalAgent:
             AgentCommand.EXTRACT_STRUCTURED_DATA: self._cmd_extract_structured_data,
             AgentCommand.LIST_MCP_TOOLS: self._cmd_list_mcp_tools,
             AgentCommand.CALL_MCP_TOOL: self._cmd_call_mcp_tool,
+            AgentCommand.AUTHENTICATE_MCP_SERVER: self._cmd_authenticate_mcp_server,
+            AgentCommand.GET_MCP_AUTH_STATUS: self._cmd_get_mcp_auth_status,
             AgentCommand.RUN_SHELL: self._cmd_run_shell,
             AgentCommand.GET_WORKDIR: self._cmd_workdir,
         }
@@ -487,6 +493,23 @@ class LocalAgent:
             except Exception:
                 arguments = {}
         return self.mcp_manager.call_tool(server_name, tool_name, arguments)
+
+    def _cmd_authenticate_mcp_server(self, kwargs: Dict) -> str:
+        server_name = kwargs.get("server_name", "")
+        port = kwargs.get("port", 8089)
+        return self.mcp_manager.authenticate_server_oauth(server_name, port=port)
+
+    def _cmd_get_mcp_auth_status(self, kwargs: Dict) -> str:
+        servers = self.mcp_manager.get_server_names()
+        if not servers:
+            return "No MCP servers configured."
+        lines = ["## MCP Server Authentication Status:"]
+        for s in servers:
+            has_token = s in self.mcp_manager.stored_tokens
+            cfg = self.mcp_manager.servers_config.get(s, {})
+            url_cmd = cfg.get("url") or cfg.get("command") or "N/A"
+            lines.append(f"- **{s}** ({url_cmd}): {'Authenticated 🔑' if has_token else 'Not Authenticated 🔒'}")
+        return "\n".join(lines)
 
     def _cmd_workdir(self, kwargs: Dict) -> str:
         return str(self.project_root)
