@@ -7,7 +7,7 @@ import json
 import inspect
 import asyncio
 import concurrent.futures
-from typing import Callable, Dict, Any, List
+from typing import Callable, Dict, Any, List, Optional
 from pathlib import Path
 from filesystem import ProjectExplorer
 from code_reader import CodeReader, ProjectIndex
@@ -15,6 +15,7 @@ from code_editor import CodeEditor
 from skill_manager import SkillManager
 from web_search import WebSearchManager
 from crawl4ai_toolkit import Crawl4AIToolkit
+from agent_manager import AgentManager
 
 
 def run_async_safely(coro):
@@ -44,6 +45,7 @@ class ToolkitAdapter:
         self.editor = CodeEditor(self.root)
         self.index = ProjectIndex(self.root)
         self.skill_manager = SkillManager(project_root=self.root)
+        self.agent_manager = AgentManager(project_root=self.root)
         self.web_search_manager = WebSearchManager()
         self.crawl_toolkit = Crawl4AIToolkit()
 
@@ -74,6 +76,9 @@ class ToolkitAdapter:
         self.tools["get_skill"] = self._wrap(self._get_skill)
         self.tools["read_skill_resource"] = self._wrap(self._read_skill_resource)
         self.tools["execute_skill_script"] = self._wrap(self._execute_skill_script)
+        self.tools["list_agents"] = self._wrap(self._list_agents)
+        self.tools["get_agent"] = self._wrap(self._get_agent)
+        self.tools["call_subagent"] = self._wrap(self._call_subagent)
         self.tools["web_search"] = self._wrap(self._web_search)
         self.tools["fetch_web_page"] = self._wrap(self._fetch_web_page)
         self.tools["search_code_docs"] = self._wrap(self._search_code_docs)
@@ -287,6 +292,57 @@ class ToolkitAdapter:
             return "ERROR: skill_name and script_name are required."
         return self.skill_manager.execute_skill_script(skill_name, script_name, script_args)
 
+    # ---------- Agent profile & Subagent tools ----------
+    def _list_agents(self, args: Dict[str, Any] = None) -> str:
+        agents = self.agent_manager.list_agents()
+        if not agents:
+            return "No agent profiles found."
+        lines = ["## Available Agent Profiles:"]
+        for a in agents:
+            tools_str = ", ".join(a['tools']) if a['tools'] else "All / Default"
+            lines.append(f"- **{a['name']}**: {a['description']} [Tools: {tools_str}]")
+        return "\n".join(lines)
+
+    def _get_agent(self, args: Dict[str, Any]) -> str:
+        agent_name = str(args.get("agent_name", "")).strip().strip("'\"")
+        if not agent_name:
+            return "ERROR: Please provide an agent_name."
+        return self.agent_manager.get_agent_overview(agent_name)
+
+    def _call_subagent(self, args: Dict[str, Any]) -> str:
+        agent_name = str(args.get("agent_name", "")).strip().strip("'\"")
+        prompt = str(args.get("prompt", "")).strip()
+
+        if not agent_name or not prompt:
+            return "ERROR: agent_name and prompt are required."
+
+        agent = self.agent_manager.get_agent(agent_name)
+        if not agent:
+            available = list(self.agent_manager.agents.keys())
+            return f"ERROR: Agent '{agent_name}' not found. Available agents: {available}"
+
+        try:
+            from local_code_agent_with_toolkit import run_agent_loop, LANGCHAIN_AVAILABLE
+            if not LANGCHAIN_AVAILABLE:
+                return (
+                    f"[Subagent Call Simulation for '{agent_name}']\n"
+                    f"Agent Description: {agent.description}\n"
+                    f"Allowed Tools: {agent.tools}\n"
+                    f"Prompt: {prompt}\n"
+                    f"Note: LangChain is not installed, subagent execution simulated."
+                )
+
+            res = run_agent_loop(
+                adapter=self,
+                user_prompt=prompt,
+                max_turns=args.get("max_turns", 10),
+                max_tool_calls=args.get("max_tool_calls", 20),
+                agent_name=agent_name,
+            )
+            return f"[Subagent '{agent_name}' Result]\n{res.get('final_response', '')}"
+        except Exception as e:
+            return f"ERROR executing subagent '{agent_name}': {e}"
+
     # ---------- Web Search tools ----------
     def _web_search(self, args: Dict[str, Any]) -> str:
         query = str(args.get("query", "")).strip().strip("'\"")
@@ -335,6 +391,11 @@ class ToolkitAdapter:
 - get_skill(skill_name: str) -> str
 - read_skill_resource(skill_name: str, resource_rel_path: str) -> str
 - execute_skill_script(skill_name: str, script_name: str, args: list?) -> str
+
+### Agent Profiles & Subagents
+- list_agents() -> str
+- get_agent(agent_name: str) -> str
+- call_subagent(agent_name: str, prompt: str) -> str
 
 ### Web Search & Async Crawling
 - web_search(query: str, max_results: int?) -> str
@@ -429,6 +490,9 @@ class ToolkitAdapter:
             "get_skill": {"skill_name": "str"},
             "read_skill_resource": {"skill_name": "str", "resource_rel_path": "str"},
             "execute_skill_script": {"skill_name": "str", "script_name": "str", "args": "list?"},
+            "list_agents": {},
+            "get_agent": {"agent_name": "str"},
+            "call_subagent": {"agent_name": "str", "prompt": "str"},
             "web_search": {"query": "str", "max_results": "int?"},
             "fetch_web_page": {"url": "str", "max_chars": "int?"},
             "search_code_docs": {"query": "str", "topic": "str?"},
