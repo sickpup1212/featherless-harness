@@ -2,7 +2,7 @@
 test_mcp.py
 
 Unit and integration tests for MCPManager, mcp.json/mpc.json parsing,
-ToolkitAdapter MCP integration, and LocalAgent MCP commands.
+OAuth redirection probing, ToolkitAdapter MCP integration, and LocalAgent MCP commands.
 """
 
 import json
@@ -10,7 +10,7 @@ import os
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, MagicMock
 
 from mcp_manager import MCPManager, MCP_AVAILABLE
 from toolkit_adapters import ToolkitAdapter
@@ -70,6 +70,28 @@ class TestMCPIntegration(unittest.TestCase):
         self.assertIn("reddit", servers)
         self.assertIn("playwright", servers)
         self.assertIn("firecrawl-mcp", servers)
+
+    def test_oauth_probing_interception(self):
+        mpc_path = self.root / "mpc.json"
+        with open(mpc_path, "w", encoding="utf-8") as f:
+            json.dump(self.sample_mcp_config, f)
+
+        manager = MCPManager(project_root=str(self.root))
+
+        # Probe reddit URL directly
+        prompt = manager.probe_oauth_flow("reddit", "https://mcp.mcpbundles.com/bundle/reddit", {})
+        self.assertIsNotNone(prompt)
+        self.assertIn("OAuth Authentication Required", prompt)
+        self.assertIn("reddit", prompt)
+        self.assertIn("Authorization", prompt)
+
+    def test_setting_custom_headers_and_tokens(self):
+        manager = MCPManager(project_root=str(self.root))
+        manager.servers_config = {"custom-server": {"url": "https://example.com/mcp"}}
+
+        manager.set_server_token("custom-server", "secret_token_123")
+        headers = manager.servers_config["custom-server"].get("headers", {})
+        self.assertEqual(headers.get("Authorization"), "Bearer secret_token_123")
 
     @patch.object(MCPManager, "list_tools_async")
     @patch.object(MCPManager, "call_tool_async")
