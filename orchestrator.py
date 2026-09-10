@@ -28,6 +28,9 @@ class AgentCommand(Enum):
     GET_SKILL = "get_skill"
     READ_SKILL_RESOURCE = "read_skill_resource"
     EXECUTE_SKILL_SCRIPT = "execute_skill_script"
+    LIST_AGENTS = "list_agents"
+    GET_AGENT = "get_agent"
+    CALL_SUBAGENT = "call_subagent"
     WEB_SEARCH = "web_search"
     FETCH_WEB_PAGE = "fetch_web_page"
     SEARCH_CODE_DOCS = "search_code_docs"
@@ -59,7 +62,7 @@ class AgentResponse:
 
 
 class LocalAgent:
-    """Agent that can work with local code projects, skills, web search, and async crawlers."""
+    """Agent that can work with local code projects, skills, agent profiles, web search, and async crawlers."""
 
     def __init__(self, project_path: str,
                  auto_apply_edits: bool = False,
@@ -73,6 +76,7 @@ class LocalAgent:
         from code_reader import CodeReader, ProjectIndex
         from code_editor import CodeEditor
         from skill_manager import SkillManager
+        from agent_manager import AgentManager
         from web_search import WebSearchManager
         from crawl4ai_toolkit import Crawl4AIToolkit
 
@@ -81,6 +85,7 @@ class LocalAgent:
         self.editor = CodeEditor(self.project_root, auto_apply=self.auto_apply)
         self.index = ProjectIndex(self.project_root)
         self.skill_manager = SkillManager(project_root=self.project_root)
+        self.agent_manager = AgentManager(project_root=self.project_root)
         self.web_search_manager = WebSearchManager()
         self.crawl_toolkit = Crawl4AIToolkit()
 
@@ -123,6 +128,11 @@ class LocalAgent:
 - `get_skill(skill_name)` - View skill instructions and capabilities
 - `read_skill_resource(skill_name, resource_rel_path)` - Read reference doc or schema from skill
 - `execute_skill_script(skill_name, script_name, args)` - Run script from skill
+
+### Agent Profiles & Subagents
+- `list_agents()` - Discover available agent profiles
+- `get_agent(agent_name)` - View agent profile details
+- `call_subagent(agent_name, prompt)` - Delegate prompt to a subagent profile
 
 ### Web Search & Async Crawling
 - `web_search(query, max_results)` - Search the live web
@@ -186,6 +196,9 @@ class LocalAgent:
             AgentCommand.GET_SKILL: self._cmd_get_skill,
             AgentCommand.READ_SKILL_RESOURCE: self._cmd_read_skill_resource,
             AgentCommand.EXECUTE_SKILL_SCRIPT: self._cmd_execute_skill_script,
+            AgentCommand.LIST_AGENTS: self._cmd_list_agents,
+            AgentCommand.GET_AGENT: self._cmd_get_agent,
+            AgentCommand.CALL_SUBAGENT: self._cmd_call_subagent,
             AgentCommand.WEB_SEARCH: self._cmd_web_search,
             AgentCommand.FETCH_WEB_PAGE: self._cmd_fetch_web_page,
             AgentCommand.SEARCH_CODE_DOCS: self._cmd_search_code_docs,
@@ -377,6 +390,34 @@ class LocalAgent:
         if isinstance(args, str):
             args = [args]
         return self.skill_manager.execute_skill_script(skill_name, script_name, args)
+
+    def _cmd_list_agents(self, kwargs: Dict) -> str:
+        agents = self.agent_manager.list_agents()
+        if not agents:
+            return "No agent profiles found."
+        lines = ["## Available Agent Profiles:"]
+        for a in agents:
+            tools_str = ", ".join(a['tools']) if a['tools'] else "All / Default"
+            lines.append(f"- **{a['name']}**: {a['description']} [Tools: {tools_str}]")
+        return "\n".join(lines)
+
+    def _cmd_get_agent(self, kwargs: Dict) -> str:
+        agent_name = kwargs.get("agent_name", "")
+        return self.agent_manager.get_agent_overview(agent_name)
+
+    def _cmd_call_subagent(self, kwargs: Dict) -> str:
+        agent_name = kwargs.get("agent_name", "")
+        prompt = kwargs.get("prompt", "")
+        if not agent_name or not prompt:
+            return "ERROR: agent_name and prompt are required"
+
+        agent = self.agent_manager.get_agent(agent_name)
+        if not agent:
+            return f"ERROR: Agent profile '{agent_name}' not found."
+
+        from toolkit_adapters import ToolkitAdapter
+        adapter = ToolkitAdapter(str(self.project_root))
+        return adapter.dispatch("call_subagent", {"agent_name": agent_name, "prompt": prompt})
 
     def _cmd_web_search(self, kwargs: Dict) -> str:
         query = kwargs.get("query", "")

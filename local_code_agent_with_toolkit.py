@@ -96,6 +96,9 @@ Examples:
 - call:get_project_index{{}}
 - call:list_skills{{}}
 - call:get_skill{{skill_name: code_review}}
+- call:list_agents{{}}
+- call:get_agent{{agent_name: file-manager}}
+- call:call_subagent{{agent_name: file-manager, prompt: list files in root}}
 - call:web_search{{query: python asyncio tutorial, max_results: 5}}
 - call:fetch_web_page{{url: https://docs.python.org/3/library/asyncio.html}}
 - call:search_code_docs{{query: create_task, topic: python}}
@@ -104,12 +107,57 @@ Tool schemas:
 {tool_schemas}
 """
 
-def build_system(project_root: str, max_tool_calls: int, adapter: ToolkitAdapter) -> str:
-    schemas = adapter.get_tool_schemas()
+SUBAGENT_SYSTEM_TEMPLATE = """You are a subagent named '{agent_name}'.
+Project root: {project_root}
+Description: {description}
+
+{custom_system_message}
+
+You operate in an autonomous execution loop. Given a task:
+1. Perform the task using your available tools.
+2. Observe tool results and continue calling tools until the subagent goal is completed.
+3. Provide a clear summary and conclusion once finished.
+
+Tool call format (emit exactly this):
+call:tool_name{{argument1: value1, argument2: value2}}
+
+Tool schemas:
+{tool_schemas}
+"""
+
+def build_system(project_root: str, max_tool_calls: int, adapter: ToolkitAdapter, agent_name: Optional[str] = None) -> str:
+    all_schemas = adapter.get_tool_schemas()
+    allowed_tools = None
+    custom_sys_msg = ""
+    description = ""
+
+    if agent_name:
+        agent = adapter.agent_manager.get_agent(agent_name)
+        if agent:
+            if agent.tools:
+                allowed_tools = set(agent.tools)
+            custom_sys_msg = agent.system_message
+            description = agent.description
+
+    if allowed_tools is not None:
+        schemas = {k: v for k, v in all_schemas.items() if k in allowed_tools}
+    else:
+        schemas = all_schemas
+
     schema_lines = []
     for name, params in schemas.items():
         param_str = ", ".join(f"{k}: {v}" for k, v in params.items())
         schema_lines.append(f"- {name}({param_str}) -> {('json' if name in {'list_pending_edits','apply_pending_edits','search_symbols','list_symbols'} else 'str')}")
+
+    if agent_name:
+        return SUBAGENT_SYSTEM_TEMPLATE.format(
+            agent_name=agent_name,
+            project_root=project_root,
+            description=description,
+            custom_system_message=custom_sys_msg,
+            tool_schemas="\n".join(schema_lines),
+        )
+
     return SYSTEM_TEMPLATE.format(
         project_root=project_root,
         max_tool_calls=max_tool_calls,
@@ -117,13 +165,21 @@ def build_system(project_root: str, max_tool_calls: int, adapter: ToolkitAdapter
     )
 
 def run_agent_loop(adapter: ToolkitAdapter, user_prompt: str,
-                   max_turns: int = 15, max_tool_calls: int = 30, verbose: bool = False):
+                   max_turns: int = 15, max_tool_calls: int = 30,
+                   agent_name: Optional[str] = None, verbose: bool = False):
     """Autonomous tool calling loop (Claude Code / Hermes style)."""
     if not LANGCHAIN_AVAILABLE:
         raise RuntimeError("LangChain is required for run_agent_loop")
 
     project_root = adapter.root
-    system = build_system(project_root, max_tool_calls, adapter)
+    system = build_system(project_root, max_tool_calls, adapter, agent_name=agent_name)
+
+    # Determine tool restrictions if running as named subagent profile
+    allowed_tools = None
+    if agent_name:
+        agent = adapter.agent_manager.get_agent(agent_name)
+        if agent and agent.tools:
+            allowed_tools = set(agent.tools)
 
     messages = [
         SystemMessage(content=system),
@@ -155,10 +211,13 @@ def run_agent_loop(adapter: ToolkitAdapter, user_prompt: str,
             tool_name = call.get("name")
             args = call.get("arguments", {})
 
-            try:
-                result = adapter.dispatch(tool_name, args)
-            except Exception as e:
-                result = f"ERROR: {type(e).__name__}: {e}"
+            if allowed_tools is not None and tool_name not in allowed_tools:
+                result = f"ERROR: Tool '{tool_name}' is not allowed for subagent profile '{agent_name}'. Allowed: {sorted(list(allowed_tools))}"
+            else:
+                try:
+                    result = adapter.dispatch(tool_name, args)
+                except Exception as e:
+                    result = f"ERROR: {type(e).__name__}: {e}"
 
             tool_call_log.append({
                 "turn": turn,
@@ -200,6 +259,7 @@ def workflow(inputs: Dict[str, Any]) -> Dict[str, Any]:
     user_prompt = inputs.get("input")
     max_turns = inputs.get("max_turns", 15)
     max_tool_calls = inputs.get("max_tool_calls", 30)
+    agent_name = inputs.get("agent_name")
 
     if not project_root or not user_prompt:
         return {"error": "project_root and input are required"}
@@ -212,6 +272,7 @@ def workflow(inputs: Dict[str, Any]) -> Dict[str, Any]:
         user_prompt=user_prompt,
         max_turns=max_turns,
         max_tool_calls=max_tool_calls,
+        agent_name=agent_name,
     )
     return result
 
