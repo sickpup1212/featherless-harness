@@ -4,7 +4,46 @@ A comprehensive harness and local code agent toolkit for Featherless AI models.
 
 ## Overview
 
-`featherless-harness` provides a set of tools for local code exploration, AST symbol analysis, line-level code editing, agent orchestration, an extensible **SKILL system**, an LLM-optimized **Web Search framework**, **Crawl4AI Asynchronous Web Crawling**, and an **Autonomous Agent Execution Loop** (similar to Claude Code or Hermes).
+`featherless-harness` provides a set of tools for local code exploration, AST symbol analysis, line-level code editing, agent orchestration, an extensible **SKILL system**, an LLM-optimized **Web Search framework**, **Crawl4AI Asynchronous Web Crawling**, **MCP Server Support**, and an **Autonomous Agent Execution Loop** (similar to Claude Code or Hermes).
+
+---
+
+## MCP Server Support (`mcp_manager.py`)
+
+The framework supports connecting to external MCP (Model Context Protocol) servers using configuration files formatted as `mcp.json` or `mpc.json`.
+
+### MCP Config Format (`mcp.json` / `mpc.json`)
+```json
+{
+  "mcpServers": {
+    "reddit": {
+      "url": "https://mcp.mcpbundles.com/bundle/reddit"
+    },
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest"
+      ]
+    },
+    "firecrawl-mcp": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "firecrawl-mcp"
+      ],
+      "env": {
+        "FIRECRAWL_API_KEY": ""
+      }
+    }
+  }
+}
+```
+
+### Features
+- **Automatic Configuration Loading**: Automatically searches for `mcp.json` or `mpc.json` in project directory or accepts custom path.
+- **Stdio and SSE/URL Transports**: Connects to stdio process servers (`npx`, `python`, etc.) and SSE web endpoints.
+- **Dynamic Tool Discovery**: `list_mcp_tools()` discovers available tools from all configured MCP servers.
+- **Seamless Execution**: `call_mcp_tool(server_name, tool_name, arguments)` dispatches calls to target MCP servers.
 
 ---
 
@@ -115,6 +154,10 @@ The framework exposes the following tools via `ToolkitAdapter` and `LocalAgent`:
 - `deep_crawl(start_url: str, max_pages: int?, max_depth: int?)`: Async domain crawler.
 - `extract_structured_data(url: str, schema_description: str?)`: Extract structured text and schemas.
 
+### MCP Integration
+- `list_mcp_tools()`: Discover available tools across configured MCP servers.
+- `call_mcp_tool(server_name: str, tool_name: str, arguments: dict?)`: Execute an MCP tool.
+
 ---
 
 ## Example Usage
@@ -124,11 +167,11 @@ from toolkit_adapters import ToolkitAdapter
 
 adapter = ToolkitAdapter(".")
 
-# 1. Asynchronously crawl a webpage using Crawl4AI
-print(adapter.dispatch("crawl_url", {"url": "https://www.python.org", "max_chars": 500}))
+# 1. Discover tools from mcp.json / mpc.json
+print(adapter.dispatch("list_mcp_tools", {}))
 
-# 2. Perform deep multi-page domain crawl
-print(adapter.dispatch("deep_crawl", {"start_url": "https://docs.python.org", "max_pages": 3}))
+# 2. Asynchronously crawl a webpage using Crawl4AI
+print(adapter.dispatch("crawl_url", {"url": "https://www.python.org", "max_chars": 500}))
 
 # 3. Live web search
 print(adapter.dispatch("web_search", {"query": "Python 3.12 release features"}))

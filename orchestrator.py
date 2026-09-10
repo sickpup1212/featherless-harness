@@ -37,6 +37,8 @@ class AgentCommand(Enum):
     CRAWL_URL = "crawl_url"
     DEEP_CRAWL = "deep_crawl"
     EXTRACT_STRUCTURED_DATA = "extract_structured_data"
+    LIST_MCP_TOOLS = "list_mcp_tools"
+    CALL_MCP_TOOL = "call_mcp_tool"
     RUN_SHELL = "run_shell"
     GET_WORKDIR = "get_workdir"
 
@@ -62,11 +64,12 @@ class AgentResponse:
 
 
 class LocalAgent:
-    """Agent that can work with local code projects, skills, agent profiles, web search, and async crawlers."""
+    """Agent that can work with local code projects, skills, agent profiles, web search, MCP servers, and async crawlers."""
 
     def __init__(self, project_path: str,
                  auto_apply_edits: bool = False,
-                 max_file_lines: int = 5000):
+                 max_file_lines: int = 5000,
+                 mcp_config_path: Optional[str] = None):
         self.project_root = Path(project_path).resolve()
         self.auto_apply = auto_apply_edits
         self.max_file_lines = max_file_lines
@@ -79,6 +82,7 @@ class LocalAgent:
         from agent_manager import AgentManager
         from web_search import WebSearchManager
         from crawl4ai_toolkit import Crawl4AIToolkit
+        from mcp_manager import MCPManager
 
         self.explorer = ProjectExplorer(str(self.project_root))
         self.reader = CodeReader(self.project_root)
@@ -88,6 +92,7 @@ class LocalAgent:
         self.agent_manager = AgentManager(project_root=self.project_root)
         self.web_search_manager = WebSearchManager()
         self.crawl_toolkit = Crawl4AIToolkit()
+        self.mcp_manager = MCPManager(project_root=self.project_root, config_path=mcp_config_path)
 
         # Build initial index
         self.index.build_index()
@@ -141,6 +146,10 @@ class LocalAgent:
 - `crawl_url(url, word_count_threshold, max_chars)` - Async web crawl
 - `deep_crawl(start_url, max_pages, max_depth)` - Async multi-page domain crawler
 - `extract_structured_data(url, schema_description)` - Extract structured schemas
+
+### MCP Integration
+- `list_mcp_tools()` - Discover available tools from configured MCP servers (mcp.json / mpc.json)
+- `call_mcp_tool(server_name, tool_name, arguments)` - Call a tool on an MCP server
 
 ### Miscellaneous
 - `run_shell(command)` - Execute shell command
@@ -205,6 +214,8 @@ class LocalAgent:
             AgentCommand.CRAWL_URL: self._cmd_crawl_url,
             AgentCommand.DEEP_CRAWL: self._cmd_deep_crawl,
             AgentCommand.EXTRACT_STRUCTURED_DATA: self._cmd_extract_structured_data,
+            AgentCommand.LIST_MCP_TOOLS: self._cmd_list_mcp_tools,
+            AgentCommand.CALL_MCP_TOOL: self._cmd_call_mcp_tool,
             AgentCommand.RUN_SHELL: self._cmd_run_shell,
             AgentCommand.GET_WORKDIR: self._cmd_workdir,
         }
@@ -449,6 +460,33 @@ class LocalAgent:
         url = kwargs.get("url", "")
         schema = kwargs.get("schema_description", "")
         return asyncio.run(self.crawl_toolkit.extract_structured_data(url, schema_description=schema))
+
+    def _cmd_list_mcp_tools(self, kwargs: Dict) -> str:
+        tools = self.mcp_manager.list_tools()
+        if isinstance(tools, dict) and "error" in tools:
+            return f"MCP Error: {tools['error']}"
+        if not tools:
+            servers = self.mcp_manager.get_server_names()
+            if not servers:
+                return "No MCP servers configured in mcp.json or mpc.json."
+            return f"MCP Servers configured ({', '.join(servers)}), but no tools were discovered."
+        lines = [f"## Discovered MCP Tools ({len(tools)}):"]
+        for qname, info in tools.items():
+            lines.append(f"- **{qname}** (Server: {info['server_name']}, Tool: {info['original_name']})")
+            if info.get('description'):
+                lines.append(f"  Description: {info['description']}")
+        return "\n".join(lines)
+
+    def _cmd_call_mcp_tool(self, kwargs: Dict) -> str:
+        server_name = kwargs.get("server_name", "")
+        tool_name = kwargs.get("tool_name", "")
+        arguments = kwargs.get("arguments", {})
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except Exception:
+                arguments = {}
+        return self.mcp_manager.call_tool(server_name, tool_name, arguments)
 
     def _cmd_workdir(self, kwargs: Dict) -> str:
         return str(self.project_root)
