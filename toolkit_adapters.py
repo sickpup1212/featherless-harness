@@ -16,6 +16,7 @@ from skill_manager import SkillManager
 from web_search import WebSearchManager
 from crawl4ai_toolkit import Crawl4AIToolkit
 from agent_manager import AgentManager
+from mcp_manager import MCPManager
 
 
 def run_async_safely(coro):
@@ -36,7 +37,7 @@ def run_async_safely(coro):
 class ToolkitAdapter:
     """Wraps your toolkit objects and exposes them as tool-callable functions."""
 
-    def __init__(self, project_root: str):
+    def __init__(self, project_root: str, mcp_config_path: Optional[str] = None):
         self.root = Path(project_root).resolve()
 
         # Original toolkit instances
@@ -48,6 +49,7 @@ class ToolkitAdapter:
         self.agent_manager = AgentManager(project_root=self.root)
         self.web_search_manager = WebSearchManager()
         self.crawl_toolkit = Crawl4AIToolkit()
+        self.mcp_manager = MCPManager(project_root=self.root, config_path=mcp_config_path)
 
         # Build the index once here
         self.index.build_index()
@@ -85,6 +87,8 @@ class ToolkitAdapter:
         self.tools["crawl_url"] = self._wrap(self.crawl_toolkit.crawl_url)
         self.tools["deep_crawl"] = self._wrap(self.crawl_toolkit.deep_crawl)
         self.tools["extract_structured_data"] = self._wrap(self.crawl_toolkit.extract_structured_data)
+        self.tools["list_mcp_tools"] = self._wrap(self._list_mcp_tools)
+        self.tools["call_mcp_tool"] = self._wrap(self._call_mcp_tool)
         self.tools["help"] = self._wrap(self._help)
 
     def _wrap_explore(self, args: Dict[str, Any]) -> str:
@@ -359,6 +363,38 @@ class ToolkitAdapter:
         topic = str(args.get("topic", "python")).strip().strip("'\"")
         return self.web_search_manager.search_code_docs(query, topic=topic)
 
+    # ---------- MCP tools ----------
+    def _list_mcp_tools(self, args: Dict[str, Any] = None) -> str:
+        servers = self.mcp_manager.get_server_names()
+        if not servers:
+            return "No MCP servers configured in mcp.json or mpc.json."
+        tools = self.mcp_manager.list_tools()
+        if isinstance(tools, dict) and "error" in tools:
+            return f"MCP Error: {tools['error']}"
+        if not tools:
+            return f"MCP Servers configured ({', '.join(servers)}), but no tools were discovered or servers failed to respond."
+        lines = [f"## Discovered MCP Tools ({len(tools)}):"]
+        for qname, info in tools.items():
+            lines.append(f"- **{qname}** (Server: {info['server_name']}, Tool: {info['original_name']})")
+            if info.get('description'):
+                lines.append(f"  Description: {info['description']}")
+            if info.get('inputSchema'):
+                lines.append(f"  Schema: {json.dumps(info['inputSchema'])}")
+        return "\n".join(lines)
+
+    def _call_mcp_tool(self, args: Dict[str, Any]) -> str:
+        server_name = str(args.get("server_name", "")).strip().strip("'\"")
+        tool_name = str(args.get("tool_name", "")).strip().strip("'\"")
+        arguments = args.get("arguments", {})
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except Exception:
+                arguments = {}
+        if not server_name or not tool_name:
+            return "ERROR: server_name and tool_name are required for call_mcp_tool."
+        return self.mcp_manager.call_tool(server_name, tool_name, arguments)
+
     def _help(self, args: Dict[str, Any] = None) -> str:
         return """
 ## Available Tools
@@ -404,6 +440,10 @@ class ToolkitAdapter:
 - crawl_url(url: str, word_count_threshold: int?, max_chars: int?) -> str
 - deep_crawl(start_url: str, max_pages: int?, max_depth: int?) -> str
 - extract_structured_data(url: str, schema_description: str?) -> str
+
+### MCP Integration
+- list_mcp_tools() -> str
+- call_mcp_tool(server_name: str, tool_name: str, arguments: dict?) -> str
 """
 
     # ---------- generic wrapper supporting sync and async functions ----------
@@ -457,9 +497,21 @@ class ToolkitAdapter:
 
     def dispatch(self, tool_name: str, args: Dict[str, Any]) -> str:
         """Execute a tool by name synchronously (used by the agent loop)."""
-        if tool_name not in self.tools:
-            return f"ERROR: unknown tool '{tool_name}'. Available: {list(self.tools.keys())}"
-        return self.tools[tool_name](args)
+        if tool_name in self.tools:
+            return self.tools[tool_name](args)
+
+        # Check if tool matches a discovered MCP tool or pattern mcp_<server_name>_<tool_name>
+        if tool_name in self.mcp_manager.tools_cache:
+            info = self.mcp_manager.tools_cache[tool_name]
+            return self.mcp_manager.call_tool(info["server_name"], info["original_name"], args)
+
+        if tool_name.startswith("mcp_"):
+            parts = tool_name.split("_", 2)
+            if len(parts) == 3:
+                server_name, original_tool = parts[1], parts[2]
+                return self.mcp_manager.call_tool(server_name, original_tool, args)
+
+        return f"ERROR: unknown tool '{tool_name}'. Available: {list(self.tools.keys())}"
 
     async def dispatch_async(self, tool_name: str, args: Dict[str, Any]) -> str:
         """Execute a tool by name asynchronously."""
@@ -468,7 +520,7 @@ class ToolkitAdapter:
 
     def get_tool_schemas(self) -> Dict[str, Any]:
         """Return a dict of tool name -> schema (for use in prompts/system)."""
-        return {
+        schemas = {
             "explore": {"max_depth": "int (default 3)"},
             "read_file": {"rel_path": "str", "start_line": "int?", "end_line": "int?"},
             "read_chunk": {"rel_path": "str", "focus_line": "int", "context_lines": "int"},
@@ -499,5 +551,13 @@ class ToolkitAdapter:
             "crawl_url": {"url": "str", "word_count_threshold": "int?", "max_chars": "int?"},
             "deep_crawl": {"start_url": "str", "max_pages": "int?", "max_depth": "int?"},
             "extract_structured_data": {"url": "str", "schema_description": "str?"},
+            "list_mcp_tools": {},
+            "call_mcp_tool": {"server_name": "str", "tool_name": "str", "arguments": "dict?"},
             "help": {},
         }
+
+        # Dynamically append any cached MCP tools
+        for qname, info in self.mcp_manager.tools_cache.items():
+            schemas[qname] = info.get("inputSchema", {})
+
+        return schemas
