@@ -1,10 +1,12 @@
 # local_agent/toolkit_adapters.py
 """
 Adapter layer: exposes your original toolkit classes/functions as named
-tools the agent loop can dispatch.
+tools the agent loop can dispatch, with full support for async tools.
 """
 import json
 import inspect
+import asyncio
+import concurrent.futures
 from typing import Callable, Dict, Any, List
 from pathlib import Path
 from filesystem import ProjectExplorer
@@ -12,6 +14,22 @@ from code_reader import CodeReader, ProjectIndex
 from code_editor import CodeEditor
 from skill_manager import SkillManager
 from web_search import WebSearchManager
+from crawl4ai_toolkit import Crawl4AIToolkit
+
+
+def run_async_safely(coro):
+    """Run an async coroutine safely from sync code even if an event loop is running."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(asyncio.run, coro)
+            return future.result()
+    else:
+        return asyncio.run(coro)
 
 
 class ToolkitAdapter:
@@ -27,6 +45,7 @@ class ToolkitAdapter:
         self.index = ProjectIndex(self.root)
         self.skill_manager = SkillManager(project_root=self.root)
         self.web_search_manager = WebSearchManager()
+        self.crawl_toolkit = Crawl4AIToolkit()
 
         # Build the index once here
         self.index.build_index()
@@ -58,6 +77,9 @@ class ToolkitAdapter:
         self.tools["web_search"] = self._wrap(self._web_search)
         self.tools["fetch_web_page"] = self._wrap(self._fetch_web_page)
         self.tools["search_code_docs"] = self._wrap(self._search_code_docs)
+        self.tools["crawl_url"] = self._wrap(self.crawl_toolkit.crawl_url)
+        self.tools["deep_crawl"] = self._wrap(self.crawl_toolkit.deep_crawl)
+        self.tools["extract_structured_data"] = self._wrap(self.crawl_toolkit.extract_structured_data)
         self.tools["help"] = self._wrap(self._help)
 
     def _wrap_explore(self, args: Dict[str, Any]) -> str:
@@ -314,15 +336,20 @@ class ToolkitAdapter:
 - read_skill_resource(skill_name: str, resource_rel_path: str) -> str
 - execute_skill_script(skill_name: str, script_name: str, args: list?) -> str
 
-### Web Search
+### Web Search & Async Crawling
 - web_search(query: str, max_results: int?) -> str
 - fetch_web_page(url: str, max_chars: int?) -> str
 - search_code_docs(query: str, topic: str?) -> str
+- crawl_url(url: str, word_count_threshold: int?, max_chars: int?) -> str
+- deep_crawl(start_url: str, max_pages: int?, max_depth: int?) -> str
+- extract_structured_data(url: str, schema_description: str?) -> str
 """
 
-    # ---------- generic wrapper ----------
+    # ---------- generic wrapper supporting sync and async functions ----------
     def _wrap(self, fn: Callable) -> Callable[[Dict[str, Any]], str]:
-        """Wrap any function so it accepts a single args dict and returns a string."""
+        """Wrap any sync or async function so it accepts a single args dict and returns a string."""
+        is_async = inspect.iscoroutinefunction(fn)
+
         def wrapper(args: Dict[str, Any] = None) -> str:
             if args is None:
                 args = {}
@@ -331,9 +358,9 @@ class ToolkitAdapter:
                 params = list(sig.parameters.values())
 
                 if len(params) == 0:
-                    result = fn()
+                    raw_res = fn()
                 elif len(params) == 1 and (params[0].name == "args" or params[0].annotation == Dict[str, Any]):
-                    result = fn(args)
+                    raw_res = fn(args)
                 else:
                     converted_args = {}
                     for param in params:
@@ -353,7 +380,12 @@ class ToolkitAdapter:
                             converted_args[pname] = val
                         elif param.default != inspect.Parameter.empty:
                             converted_args[pname] = param.default
-                    result = fn(**converted_args)
+                    raw_res = fn(**converted_args)
+
+                if is_async or inspect.iscoroutine(raw_res):
+                    result = run_async_safely(raw_res)
+                else:
+                    result = raw_res
 
                 if not isinstance(result, str):
                     return json.dumps(result, default=str)
@@ -363,10 +395,15 @@ class ToolkitAdapter:
         return wrapper
 
     def dispatch(self, tool_name: str, args: Dict[str, Any]) -> str:
-        """Execute a tool by name (used by the agent loop)."""
+        """Execute a tool by name synchronously (used by the agent loop)."""
         if tool_name not in self.tools:
             return f"ERROR: unknown tool '{tool_name}'. Available: {list(self.tools.keys())}"
         return self.tools[tool_name](args)
+
+    async def dispatch_async(self, tool_name: str, args: Dict[str, Any]) -> str:
+        """Execute a tool by name asynchronously."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.dispatch, tool_name, args)
 
     def get_tool_schemas(self) -> Dict[str, Any]:
         """Return a dict of tool name -> schema (for use in prompts/system)."""
@@ -395,5 +432,8 @@ class ToolkitAdapter:
             "web_search": {"query": "str", "max_results": "int?"},
             "fetch_web_page": {"url": "str", "max_chars": "int?"},
             "search_code_docs": {"query": "str", "topic": "str?"},
+            "crawl_url": {"url": "str", "word_count_threshold": "int?", "max_chars": "int?"},
+            "deep_crawl": {"start_url": "str", "max_pages": "int?", "max_depth": "int?"},
+            "extract_structured_data": {"url": "str", "schema_description": "str?"},
             "help": {},
         }
